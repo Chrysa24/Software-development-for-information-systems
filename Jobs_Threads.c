@@ -15,6 +15,7 @@ extern int batch_counter;
 
 extern Job* JobHead; // Head of the Jobs List
 extern Solution* Sol_List;
+extern BUCKET_LIMIT;
 
 void InsertSolList(Solution** head, Solution *node){
 	if(*head == NULL){
@@ -88,8 +89,8 @@ int BucketsToJobs(bucket* current, Job *head, uint64_t** Index1, uint64_t** Inde
 		job->thread_mut = thread_mut;
 		job->waiting = waiting;
 
-		if(counter < 2){
-			for(int i=0 ; i< num_of_buckets/3-1 ; i++)
+		if(counter < BUCKET_LIMIT-1){
+			for(int i=0 ; i< num_of_buckets/BUCKET_LIMIT-1 ; i++)
 				temp = temp->next;
 		
 			last = temp;
@@ -128,8 +129,8 @@ int BucketsToJobsTriple(bucket* current, Job *head, uint64_t** Index1, uint64_t*
 		job->thread_mut = thread_mut;
 		job->waiting = waiting;
 
-		if(counter < 2){
-			for(int i=0 ; i< num_of_buckets/3-1 ; i++)
+		if(counter < BUCKET_LIMIT-1){
+			for(int i=0 ; i< num_of_buckets/BUCKET_LIMIT-1 ; i++)
 				temp = temp->next;
 		
 			last = temp;
@@ -185,6 +186,8 @@ void *QueryThread(void** x){
 	free(waiting);
 	free(thread_mut);
 	free(thread_cond);
+	if(pthread_detach(pthread_self()) == 0)
+		printf("Detachment failed\n");
 }
 
 void *SortThread(void *vargp){
@@ -204,7 +207,6 @@ void *SortThread(void *vargp){
 			continue;
 		}
 
-
 		if(current_job->flag==1)
 			FinalizeTablesThread(current_job->From, current_job->To, &current_job->mybucket);
 		else if(current_job->flag==2)
@@ -217,6 +219,8 @@ void *SortThread(void *vargp){
 		pthread_mutex_unlock(current_job->thread_mut);
 		free(current_job);
 	}
+	if(pthread_detach(pthread_self()) == 0)
+		printf("Detachment failed\n");
 }
 
 void InitializeJobsHead(Job **head){
