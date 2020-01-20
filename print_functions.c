@@ -9,6 +9,10 @@ void PrintTable(uint64_t** Table, uint64_t rows){
 		printf("%lu | %lu\n", Table[i][0], Table[i][1]);
 }
 
+void PrintBucketNode(bucket* node){
+	printf("From %lu to %lu\n", node->start, node->end);
+}
+
 void PrintHist(int* hist){
 	int i;
 
