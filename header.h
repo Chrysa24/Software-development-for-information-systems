@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <semaphore.h>
+#include <stdbool.h> 
 
 typedef struct Bucket {
     int flag;
@@ -101,36 +102,82 @@ typedef struct commandList {
 }COMMANDLIST;
 
 typedef struct QueryJob{
-	// The arguments passed to a query thread
 	uint64_t ***arrayname;
 	Initial_Table* Table;
 	int Flag;
-	int count;
+	int count; // Index of the query
 	COMMANDLIST *commandListHead;
 	struct QueryJob *next;
 } Qjob;
 
+typedef struct SortJob{
+	bucket *mybucket;
+	uint64_t** From, ** To; // The tables for sorting
+	int columns;
+	int flag; //Specify the job
+	pthread_cond_t* thread_cond;
+	pthread_mutex_t* thread_mut;
+	int* waiting;
+	struct SortJob *next;
+} Sjob;
+
 typedef struct JOB_HEAD_NODE{
 	Qjob *qjobs;
+	Sjob* sjobs;
 	int counter;
 } Job;
 
+typedef struct statistics{
+	int64_t Ia;
+	int64_t Ua;
+	int64_t Fa;
+	int64_t Da;
+	bool* check;
+}Statistics;
 
+
+
+
+// JOBS_THREADS 
+
+void InsertSolList(Solution** , Solution*);
+void WorkingOnQuery(Qjob* , pthread_cond_t* , pthread_mutex_t* , int* ,Statistics**);
+Qjob* PopJob(Job*);
+Sjob* SPopJob(Job*);
+int BucketsToJobs(bucket* , Job *, uint64_t** , uint64_t** , pthread_cond_t* , pthread_mutex_t* , int* , int);
+int BucketsToJobsTriple(bucket* , Job*, uint64_t** , uint64_t** , int , pthread_cond_t* , pthread_mutex_t* , int* , int);
+void *QueryThread(void**);
+void *SortThread(void *);
+void InitializeJobsHead(Job **);
+void AddJob(Job* , Qjob*);
+void SAddJob(Job *, Sjob *);
+
+
+// STATISTICS
+
+int64_t InformStatistics(Statistics** ,int , int ,uint64_t , int , int ,uint64_t , int);
+int newSort(COMMANDLIST *,int* , Initial_Table* , Statistics**, Statistics**);
+int Evaluate(COMMANDLIST* , Statistics**,Statistics** ,int ,int,int* ,Initial_Table*);
+int64_t checkStats(Statistics** ,int , int , int , int);
+void DeleteStats(Statistics** ,int);
+void DeleteinitStats(Statistics** ,int,Initial_Table*);
+void CopyStats(Statistics** ,Statistics** ,int* ,Initial_Table *,int);
+float power(float , int);
 
 // FILTER_JOIN
 
-int Filter(uint64_t** , uint64_t ,uint64_t , int, int,Current_Table*,int);
-int SelfJoin(RowIds**, uint64_t** ,uint64_t, uint64_t , uint64_t, Current_Table*,int,int);
-int Join(RowIds**, uint64_t**,uint64_t** ,uint64_t , uint64_t ,uint64_t, uint64_t ,Current_Table**, Current_Table* ,Current_Table* ,int ,int ,int);
+int Filter(uint64_t** , uint64_t ,uint64_t , int, int,Current_Table*,int, pthread_cond_t*, pthread_mutex_t*, int*);
+int SelfJoin(RowIds**, uint64_t** ,uint64_t, uint64_t , uint64_t, Current_Table*,int,int, pthread_cond_t*, pthread_mutex_t*, int*);
+int Join(RowIds**, uint64_t**,uint64_t** ,uint64_t , uint64_t ,uint64_t, uint64_t ,Current_Table**, Current_Table* ,Current_Table* ,int ,int ,int, pthread_cond_t*, pthread_mutex_t*, int*);
 int64_t EasyJoin(RowIds**,uint64_t**,uint64_t**,uint64_t, uint64_t, int,int,int);
-uint64_t JoinList(Record** ,uint64_t ** ,uint64_t ** ,uint64_t ,uint64_t);
+uint64_t JoinList(Record** ,uint64_t ** ,uint64_t ** ,uint64_t ,uint64_t, int ,int ,int , RowIds** );
 int Synchronize(RowIds** , uint64_t ***, uint64_t , Current_Table* , uint64_t** , int, int, uint64_t, int);
 uint64_t FindResult(RowIds* , uint64_t**, uint64_t, int);
 uint64_t IndexFromTuples(RowIds** , Current_Table* , int64_t ***, int, uint64_t, int, uint64_t**);
 void TuplesFromIndex(RowIds** , Current_Table* , int64_t ***, int , uint64_t );
 void SyncRows(Current_Table** , int64_t , int);
 void DestroyCols(Current_Table**, int );
-Solution* FindSolution(COMMANDLIST *,uint64_t***,Initial_Table*,Solution**,Solution*);
+Solution* FindSolution(COMMANDLIST *,uint64_t***,Initial_Table*,Solution**,Solution*, pthread_cond_t*, pthread_mutex_t*, int*,Statistics**);
 
 
 //DELETE FUNCTIONS
@@ -144,12 +191,13 @@ void DeleteArraylist(Arrays**);
 
 
 //INPUT FUNCTIONS
-void ReadFilesRecords(char* ,uint64_t*** ,Initial_Table* ,int);
+void ReadFilesRecords(char* ,uint64_t*** ,Initial_Table* ,int,Statistics**);
 int Countrows(char*);
-void ReadInputFiles(char* File,uint64_t***,Initial_Table*,int);
+void ReadInputFiles(char* File,uint64_t***,Initial_Table*,int,Statistics**);
 
 // PRINT FUNCTIONS
 void PrintTable(uint64_t** , uint64_t);
+void PrintBucketNode(bucket* );
 void PrintHist(int*);
 void PrintList(Record *);
 void PrintRows(RowIds*,int);
@@ -160,7 +208,7 @@ void projectionPrint(PROJECTION *projectionHead);
 void nodePrint(NODE *nodeHead);
 
 // INSERT FUNCTIONS
-uint64_t CreateNewIndex(Current_Table* , uint64_t, uint64_t** , uint64_t, uint64_t ***,int);
+uint64_t CreateNewIndex(Current_Table* , uint64_t, uint64_t** , uint64_t, uint64_t ***,int, pthread_cond_t*, pthread_mutex_t*, int*);
 void InitializeTuple(int64_t*, int);
 RowIds* InsertId(RowIds** , RowIds*, uint64_t, uint64_t ,int, int ,int);
 RowIds* InsertId2(RowIds**, RowIds* , uint64_t, int , int , RowIds**);
@@ -173,7 +221,7 @@ Solution* InsertSolution(Solution**, Solution*, int);
 
 // SORT FILE
 void CreateBucketList(bucket **, int* , uint64_t*);
-void DivideBucket(bucket **, int* , uint64_t* , bucket *, int);
+int DivideBucket(bucket **, int* , uint64_t* , bucket *, int);
 void RemoveBucket(bucket **, bucket *);
 void ReadFile(char* , uint64_t**);
 uint64_t CountRows(char*);
@@ -186,15 +234,18 @@ void Reorder(uint64_t** , uint64_t** , uint64_t* , uint64_t , uint64_t , int);
 void CopyBucket(uint64_t** , uint64_t** , uint64_t , uint64_t );
 uint64_t Partition(uint64_t** , int64_t , int64_t);
 void Myqsort(uint64_t** , int64_t , int64_t);
-void FinalizeTables(uint64_t** , uint64_t** , bucket **);
+void FinalizeTables(uint64_t** , uint64_t** , bucket **, pthread_cond_t*, pthread_mutex_t*, int*);
+void FinalizeTablesThread(uint64_t**, uint64_t**, bucket **);
 void CompareTables(uint64_t ** ,uint64_t ** ,uint64_t , char*);
-void Sort(uint64_t** , uint64_t );
+void Sort(uint64_t** , uint64_t, pthread_cond_t* , pthread_mutex_t*, int*);
+
 
 void CreateHistTriple(int64_t** , int* , int64_t , int64_t , int);
 void ReorderTriple(int64_t** , int64_t** , uint64_t* , int64_t , int64_t , int , int);
 uint64_t PartitionTriple(int64_t** , int64_t , int64_t, int);
-void SortTriple(int64_t** , uint64_t , int);
-void FinalizeTablesTriple(int64_t** , int64_t** , bucket **, int);
+void SortTriple(int64_t** , uint64_t , int,pthread_cond_t* , pthread_mutex_t*, int*);
+void FinalizeTablesTriple(int64_t** , int64_t** , bucket **, int, pthread_cond_t*, pthread_mutex_t*, int*);
+void FinalizeTablesThreadTriple(uint64_t** , uint64_t** , bucket **, int);
 void CopyBucketTriple(int64_t** , int64_t** , uint64_t , uint64_t, int);
 void MyqsortTriple(int64_t**, int64_t , int64_t , int);
 
@@ -211,4 +262,3 @@ void nodeFree(NODE *nodeHead);
 PROJECTION *projectionInit(PROJECTION *projectionHead);
 void projectionFree(PROJECTION *projectionHead);
 void projectionInsert(PROJECTION *projectionHead, __uint64_t array, __uint64_t col);
-
