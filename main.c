@@ -26,7 +26,7 @@ int main(int argc, char* argv[]){
 	}
 
 	int Flag = 0, num_of_files, num_of_queries, batchend;
-	int qthreads = 3, sthreads = 3;
+	int qthreads = 3, sthreads = 8;
 
 	if(strcmp(argv[1], "-s") == 0)
 		Flag=1;
@@ -37,9 +37,19 @@ int main(int argc, char* argv[]){
 
 	if(argc > 2){
 		qthreads = atoi(argv[2]);
+		if(qthreads>4)
+			printf("Warning: The program might be Killed!\n");
 		sthreads = atoi(argv[3]);
+		if(sthreads==0){
+			printf("Sort Threads can not be 0. Default value: 8\n");
+			sthreads = 8;
+		}
 		if(argc > 4)
 			BUCKET_LIMIT = atoi(argv[4]);
+			if (BUCKET_LIMIT == 0){
+				printf("The number of buckets cannot be 0. Default value: 3\n");
+				BUCKET_LIMIT = 3;
+			}
 	}
 
 	if(Flag == 0){
