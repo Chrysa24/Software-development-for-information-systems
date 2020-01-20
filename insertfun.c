@@ -1,6 +1,6 @@
 #include "header.h"
 
-uint64_t CreateNewIndex(Current_Table* cur_table, uint64_t column, uint64_t** array, uint64_t rows, uint64_t ***Index, int arraynumber){
+uint64_t CreateNewIndex(Current_Table* cur_table, uint64_t column, uint64_t** array, uint64_t rows, uint64_t ***Index, int arraynumber,  pthread_cond_t* thread_cond, pthread_mutex_t* thread_mut, int* waiting){
 	//Created new index checking if there is a pre-existing one and return its rows
    	uint64_t i;
 
@@ -21,7 +21,7 @@ uint64_t CreateNewIndex(Current_Table* cur_table, uint64_t column, uint64_t** ar
 			current = current->next;
      	}
 		if((*cur_table).column != column)
-			Sort((*Index),(*cur_table).rows);
+			Sort((*Index),(*cur_table).rows, thread_cond, thread_mut, waiting);
 
 		return (*cur_table).rows;
 	}
@@ -32,7 +32,7 @@ uint64_t CreateNewIndex(Current_Table* cur_table, uint64_t column, uint64_t** ar
 			(*Index)[i] = (uint64_t*)malloc(sizeof(uint64_t)*2);
 		
 		CreateIndexTable((*Index), array, rows, column);
-      	Sort((*Index),rows);
+      	Sort((*Index),rows, thread_cond, thread_mut, waiting);
 
       	return rows;
    	}
