@@ -13,6 +13,7 @@ pthread_mutex_t sollist_mut = PTHREAD_MUTEX_INITIALIZER;
 sem_t qthread, sthread;
 int flag_t = 0; // Flag to terminate the threads
 int batch_counter = 0;
+int BUCKET_LIMIT = 3;
 
 Job* JobHead; // Head of the Jobs List
 Solution* Sol_List = NULL;
@@ -37,6 +38,8 @@ int main(int argc, char* argv[]){
 	if(argc > 2){
 		qthreads = atoi(argv[2]);
 		sthreads = atoi(argv[3]);
+		if(argc > 4)
+			BUCKET_LIMIT = atoi(argv[4]);
 	}
 
 	if(Flag == 0){
@@ -78,14 +81,21 @@ int main(int argc, char* argv[]){
 	// Semaphores
 	sem_init(&qthread,1,0);
 	sem_init(&sthread,1,0);
+
 	
 	// Create threads
 	pthread_t thread_id;
 	for(int i=0 ; i<qthreads ; i++){
-		pthread_create(&thread_id, NULL, QueryThread, (void**)initStats);
+		pthread_attr_t tattr;
+		pthread_attr_init(&tattr);
+		pthread_attr_setdetachstate(&tattr,PTHREAD_CREATE_DETACHED);
+		pthread_create(&thread_id, &tattr, QueryThread, (void**)initStats);
 	}
 	for(int i=0 ; i<sthreads ; i++){
-		pthread_create(&thread_id, NULL, SortThread, NULL);
+		pthread_attr_t tattr;
+		pthread_attr_init(&tattr);
+		pthread_attr_setdetachstate(&tattr,PTHREAD_CREATE_DETACHED);
+		pthread_create(&thread_id, &tattr, SortThread, NULL);
 	}
 	
 	COMMANDLIST *commandListHead = NULL;
@@ -116,6 +126,7 @@ int main(int argc, char* argv[]){
 				DeleteSolution(&Sol_List);
 			pthread_mutex_unlock(&sollist_mut);
 
+			commandListFree(commandListHead);
 			printf("F\n");
 			
 			continue;
@@ -153,9 +164,6 @@ int main(int argc, char* argv[]){
 
 	// Free everything
 	
-//	commandListFree(commandListHead);
-
-
 	// Delete Statistics
 	DeleteinitStats(initStats,num_of_files,Table);
 	
@@ -174,6 +182,6 @@ int main(int argc, char* argv[]){
 	sem_destroy(&sthread);
 	pthread_cond_destroy(&batch_cond);
 
-	printf("\nQuery threads: %d\nSort threads: %d\n", qthreads, sthreads);
+	printf("\nQ threads: %d | S threads: %d | Bucket limit: %d\n", qthreads, sthreads, BUCKET_LIMIT);
 	return 0;
 }
