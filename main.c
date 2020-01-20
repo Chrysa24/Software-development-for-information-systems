@@ -1,119 +1,43 @@
-#include <stdio.h>
-//#include "work.h"
 #include "header.h"
+
+
+//Global variables
 
 pthread_cond_t batch_cond = PTHREAD_COND_INITIALIZER;
   
 pthread_mutex_t batch_mut = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t joblist_mut = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t sjoblist_mut = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t sollist_mut = PTHREAD_MUTEX_INITIALIZER;
 
-sem_t job_list;
-sem_t job;
+sem_t qthread, sthread;
 int flag_t = 0; // Flag to terminate the threads
 int batch_counter = 0;
 
-Job* JobHead; // Head of the Job List
+Job* JobHead; // Head of the Jobs List
 Solution* Sol_List = NULL;
-
-void InsertSolList(Solution** head, Solution *node){
-	if(*head == NULL){
-		*head = node;
-	}
-	else if((*head)->key > node->key){
-		node->next = (*head);
-		*head = node;
-	}
-	else{
-		Solution *temp = *head;
-		while(temp->next != NULL && temp->next->key < node->key)
-			temp = temp->next;
-		node->next = temp->next;
-		temp->next = node;
-	}
-}
-
-void QueryThread(Qjob* pointer){
-
-	Solution* result;
-	result = FindSolution(pointer->commandListHead, pointer->arrayname, pointer->Table, NULL, NULL);
-	result->key = pointer->count;
-
-	// Add on the solution list
-	pthread_mutex_lock(&sollist_mut);
-		InsertSolList(&Sol_List, result);
-	pthread_mutex_unlock(&sollist_mut);
-
-	pthread_mutex_lock(&batch_mut);
-		batch_counter -- ;
-		pthread_cond_signal(&batch_cond);
-	pthread_mutex_unlock(&batch_mut);
-
-	DeleteArraylist(&(pointer->commandListHead->arraylist));
-	commandListFree(pointer->commandListHead);
-	free(pointer);
-}
-
-Qjob* PopJob(Job* JobHead){
-	Qjob* temp = JobHead->qjobs;
-	JobHead->counter --;
-	JobHead->qjobs = JobHead->qjobs->next;
-	return temp;
-}
-
-void *ThreadFunc(void *vargp){
-
-	while(1){
-		sem_wait(&job);
-		
-		if(flag_t == 1)
-			return;
-
-		pthread_mutex_lock(&joblist_mut);
-			Qjob* current_job = PopJob(JobHead);
-		pthread_mutex_unlock(&joblist_mut);
-
-		if(current_job == NULL){
-			printf("Somebody woke me up for no reason.\n");
-			continue;
-		}
-
-		QueryThread(current_job);
-	}
-}
-
-void InitializeJobsHead(Job **head){
-	*head = (Job*)malloc(sizeof(Job));
-	(*head)->qjobs = NULL;
-	(*head)->counter = 0;
-}
-
-void AddJob(Job *head, Qjob *node){
-	if(head->qjobs == NULL)
-		head->qjobs = node;
-	else{
-		Qjob* temp;
-		temp = head->qjobs;
-		head->qjobs = node;
-		node->next = temp;
-	}
-	head->counter ++;
-}
 
 int main(int argc, char* argv[]){
 
-	if(argc!=2){
+	if(argc < 2){
 		printf("Correct syntax: ./prog -flag.\nFlag can be -s or -m based on the input file.\n");
 		return -1;
 	}
 
 	int Flag = 0, num_of_files, num_of_queries, batchend;
+	int qthreads = 3, sthreads = 3;
+
 	if(strcmp(argv[1], "-s") == 0)
 		Flag=1;
 	else if(strcmp(argv[1], "-m") == 0)
 		Flag=2;
 	else if(strcmp(argv[1], "c") == 0)
 		Flag = 3;
+
+	if(argc > 2){
+		qthreads = atoi(argv[2]);
+		sthreads = atoi(argv[3]);
+	}
 
 	if(Flag == 0){
 		printf("Correct syntax: ./prog -flag.\n Flag can be -s or -m based on the input file.\n");
@@ -140,28 +64,37 @@ int main(int argc, char* argv[]){
 	uint64_t ***arrayname;
 	arrayname = malloc(sizeof(uint64_t**)*num_of_files);
 
+	// An array with all statistics of files
+	Statistics* initStats[num_of_files];
+	
+	
 	if(Flag == 1)	
-		ReadInputFiles("/tmp/workloads/small/small.init",arrayname,Table,Flag);
+		ReadInputFiles("/tmp/workloads/small/small.init",arrayname,Table,Flag,initStats);
 	else if(Flag == 2)
-		ReadInputFiles("/tmp/workloads/medium/medium.init",arrayname,Table,Flag);
+		ReadInputFiles("/tmp/workloads/medium/medium.init",arrayname,Table,Flag,initStats);
 	else if(Flag == 3)
-		ReadInputFiles("small.init",arrayname,Table,Flag);
+		ReadInputFiles("small.init",arrayname,Table,Flag,initStats);
 
 	// Semaphores
-	sem_init(&job,1,0);
-	sem_init(&job_list, 1, 1); // Only one can have access to the job list
+	sem_init(&qthread,1,0);
+	sem_init(&sthread,1,0);
 	
 	// Create threads
 	pthread_t thread_id;
-	for(int i=0 ; i<1 ; i++){
-		pthread_create(&thread_id, NULL, ThreadFunc, NULL);
+	for(int i=0 ; i<qthreads ; i++){
+		pthread_create(&thread_id, NULL, QueryThread, (void**)initStats);
 	}
+	for(int i=0 ; i<sthreads ; i++){
+		pthread_create(&thread_id, NULL, SortThread, NULL);
+	}
+	
+	COMMANDLIST *commandListHead = NULL;
+
 
 	InitializeJobsHead(&JobHead);
 
 	for(int i = 0; i<num_of_queries ;i++){
 
-		COMMANDLIST *commandListHead = NULL;
 		commandListHead = commandListInit(commandListHead);
 		commandListHead->lineCounter = i;
 		
@@ -195,6 +128,7 @@ int main(int argc, char* argv[]){
 		argument->Flag = Flag;
 		argument->arrayname = arrayname;
 		argument->Table = Table;
+		argument->next = NULL;
 		argument->commandListHead = commandListHead;
 
 		// Add job in the list
@@ -203,21 +137,28 @@ int main(int argc, char* argv[]){
 		pthread_mutex_unlock(&joblist_mut);
 
 		// Wake up a thread
-		sem_post(&job);
+		sem_post(&qthread);
 
 		// A new query has been on the works
 		batch_counter++;
-	}		
+	}
 	flag_t = 1;
 
-	for(int i=0 ; i<10 ; i++){
-		sem_post(&job);
+	for(int i=0 ; i<qthreads ; i++){
+		sem_post(&qthread);
+	}
+	for(int i=0 ; i<sthreads ; i++){
+		sem_post(&sthread);
 	}
 
 	// Free everything
 	
-	//commandListFree(commandListHead);
+//	commandListFree(commandListHead);
 
+
+	// Delete Statistics
+	DeleteinitStats(initStats,num_of_files,Table);
+	
 	uint64_t i,j;
 	for(i=0; i<num_of_files; i++){
 		for(j=0 ; j< Table[i].columns ; j++)
@@ -227,10 +168,12 @@ int main(int argc, char* argv[]){
 	free(arrayname);
 	free(Table);
 
+	free(JobHead);
 	// Destroy Semaphores
-	sem_destroy(&job);
-	sem_destroy(&job_list);
+	sem_destroy(&qthread);
+	sem_destroy(&sthread);
 	pthread_cond_destroy(&batch_cond);
-	
+
+	printf("\nQuery threads: %d\nSort threads: %d\n", qthreads, sthreads);
 	return 0;
 }
