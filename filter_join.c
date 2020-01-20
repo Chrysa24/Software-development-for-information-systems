@@ -1,11 +1,12 @@
 #include "header.h"
 
-int Filter(uint64_t** array, uint64_t rows,uint64_t column, int key, int flag, Current_Table* cur_table,int arraynumber){
+int Filter(uint64_t** array, uint64_t rows,uint64_t column, int key, int flag, Current_Table* cur_table,int arraynumber, pthread_cond_t* thread_cond, pthread_mutex_t* thread_mut, int* waiting){
 
 	uint64_t** Index, i;
 	int64_t counter=0;
 
-    rows = CreateNewIndex(cur_table, column, array, rows, &Index,arraynumber);
+    rows = CreateNewIndex(cur_table, column, array, rows, &Index,arraynumber, thread_cond, thread_mut, waiting);
+
     FilRowIds *head = NULL, *current = NULL;
 
 	switch (flag){
@@ -58,7 +59,7 @@ int Filter(uint64_t** array, uint64_t rows,uint64_t column, int key, int flag, C
    	return 0;
 }
 
-int SelfJoin(RowIds** Result, uint64_t** array,uint64_t rows, uint64_t column1, uint64_t column2, Current_Table* cur_table,int arraynumber,int num_of_files){
+int SelfJoin(RowIds** Result, uint64_t** array,uint64_t rows, uint64_t column1, uint64_t column2, Current_Table* cur_table,int arraynumber,int num_of_files, pthread_cond_t* thread_cond, pthread_mutex_t* thread_mut, int* waiting){
 
 	uint64_t **Index, i;
 	int64_t counter = 0;
@@ -70,7 +71,7 @@ int SelfJoin(RowIds** Result, uint64_t** array,uint64_t rows, uint64_t column1, 
 		// If this table has not been proccessed
 		
 		//Create index for the column1
-		rows= CreateNewIndex(cur_table, column1, array, rows, &Index, arraynumber);
+		rows= CreateNewIndex(cur_table, column1, array, rows, &Index, arraynumber, thread_cond, thread_mut, waiting);
     
    		for(i=0; i<rows; i++)
    			if(Index[i][1] ==  array[column2][Index[i][0]]){
@@ -112,7 +113,6 @@ int SelfJoin(RowIds** Result, uint64_t** array,uint64_t rows, uint64_t column1, 
 	return 0;
 }
 
-
 int64_t EasyJoin(RowIds** Result,uint64_t** array1,uint64_t** array2,uint64_t column1,uint64_t column2, int arraynumber1,int arraynumber2,int num_of_files){
 
 	// The tables are already in the tuple list
@@ -133,12 +133,11 @@ int64_t EasyJoin(RowIds** Result,uint64_t** array1,uint64_t** array2,uint64_t co
 	return counter;
 }
 
-
-
-uint64_t JoinList(Record** Head,uint64_t ** indexA,uint64_t ** indexB,uint64_t rowsA,uint64_t rowsB){
+uint64_t JoinList(Record** Head,uint64_t ** indexA,uint64_t ** indexB,uint64_t rowsA,uint64_t rowsB, int arraynumber1,int arraynumber2,int num_of_files, RowIds** Result){
 	
 	uint64_t i, j, counter = 0, records = 0,sum=0;
 	Record* cur=(*Head);
+	RowIds* current = NULL;
 	
 	for(i=0 ; i<rowsA ; i++){
 
@@ -148,7 +147,8 @@ uint64_t JoinList(Record** Head,uint64_t ** indexA,uint64_t ** indexB,uint64_t r
 				//Insert the record
 				records++;
 				sum++;
-				Insert_Result(Head, indexA[i][0], indexB[j][0], &cur);
+				//Insert_Result(Head, indexA[i][0], indexB[j][0], &cur);
+				current = InsertId(Result, current, indexA[i][0], indexB[j][0], arraynumber1, arraynumber2, num_of_files);
 			}
 			else if(indexA[i][1] < indexB[j][1])
 				break;
@@ -287,8 +287,7 @@ void DestroyCols(Current_Table** Cur_Head, int num_of_files){
 			(*Cur_Head)[i].column = -1;
 }
 
-
-int Join(RowIds** Result, uint64_t** array1,uint64_t** array2,uint64_t rows1, uint64_t rows2,uint64_t column1,uint64_t column2,Current_Table** Cur_Head, Current_Table* cur_table1,Current_Table* cur_table2,int arraynumber1,int arraynumber2,int num_of_files){
+int Join(RowIds** Result, uint64_t** array1,uint64_t** array2,uint64_t rows1, uint64_t rows2,uint64_t column1,uint64_t column2,Current_Table** Cur_Head, Current_Table* cur_table1,Current_Table* cur_table2,int arraynumber1,int arraynumber2,int num_of_files,  pthread_cond_t* thread_cond, pthread_mutex_t* thread_mut, int* waiting){
 
 	uint64_t records = 0;
 	
@@ -308,7 +307,7 @@ int Join(RowIds** Result, uint64_t** array1,uint64_t** array2,uint64_t rows1, ui
 			// If table A is already joined in the tuple list and B is not
 			uint64_t **Index2, rowsB;
 
-			rowsB = CreateNewIndex(cur_table2, column2, array2, rows2, &Index2, arraynumber2);
+			rowsB = CreateNewIndex(cur_table2, column2, array2, rows2, &Index2, arraynumber2, thread_cond, thread_mut, waiting);
 			
 			DeleteCurFilList(&(cur_table2->filtered));
 			
@@ -329,7 +328,7 @@ int Join(RowIds** Result, uint64_t** array1,uint64_t** array2,uint64_t rows1, ui
 				
 				rows = IndexFromTuples(Result, cur_table1, &Index, arraynumber1, column1, num_of_files, array1);
 
-				SortTriple(Index, rows, num_of_files);
+				SortTriple(Index, rows, num_of_files,thread_cond, thread_mut, waiting);
 
 				TuplesFromIndex(Result,cur_table1, &Index, num_of_files, rows);
 
@@ -352,7 +351,7 @@ int Join(RowIds** Result, uint64_t** array1,uint64_t** array2,uint64_t rows1, ui
 			// If table B is already joined in the tuple list and A is not
 			uint64_t **Index1, rowsA;
 
-			rowsA = CreateNewIndex(cur_table1, column1, array1, rows1, &Index1, arraynumber1);
+			rowsA = CreateNewIndex(cur_table1, column1, array1, rows1, &Index1, arraynumber1, thread_cond, thread_mut, waiting);
 
 			DeleteCurFilList(&(cur_table1->filtered));
 	
@@ -373,7 +372,7 @@ int Join(RowIds** Result, uint64_t** array1,uint64_t** array2,uint64_t rows1, ui
 
 				rows = IndexFromTuples(Result, cur_table2, &Index, arraynumber2, column2, num_of_files, array2);
 
-				SortTriple(Index, rows, num_of_files);
+				SortTriple(Index, rows, num_of_files,thread_cond, thread_mut, waiting);
 
 				TuplesFromIndex(Result,cur_table2, &Index, num_of_files, rows);
 	
@@ -397,15 +396,15 @@ int Join(RowIds** Result, uint64_t** array1,uint64_t** array2,uint64_t rows1, ui
 			uint64_t **Index1,**Index2;
 			uint64_t rowsA,rowsB;
 
-    		rowsA = CreateNewIndex(cur_table1, column1, array1, rows1, &Index1,arraynumber1);
-    		rowsB = CreateNewIndex(cur_table2, column2, array2, rows2, &Index2,arraynumber2);	
+    		rowsA = CreateNewIndex(cur_table1, column1, array1, rows1, &Index1,arraynumber1, thread_cond, thread_mut, waiting);
+    		rowsB = CreateNewIndex(cur_table2, column2, array2, rows2, &Index2,arraynumber2, thread_cond, thread_mut, waiting);	
 		
 			DeleteCurFilList(&(cur_table1->filtered));
 			DeleteCurFilList(&(cur_table2->filtered));
 			
 			Record* Head = NULL, *cur_rec;
 			RowIds* current = NULL;
-			records = JoinList(&Head,Index1, Index2, rowsA,rowsB);
+			records = JoinList(&Head,Index1, Index2, rowsA,rowsB, arraynumber1, arraynumber2, num_of_files, Result);
 			
 			// If the tuples are 0 the query ends here
 			if(records==0){
@@ -414,11 +413,11 @@ int Join(RowIds** Result, uint64_t** array1,uint64_t** array2,uint64_t rows1, ui
 				return -1;
 			}
 		
-			cur_rec=Head;
+			/*cur_rec=Head;
 			while(cur_rec!=NULL){
 				current = InsertId(Result, current, cur_rec->rowIdA,cur_rec->rowIdB,arraynumber1,arraynumber2,num_of_files);
 				cur_rec = cur_rec->next;
-			}
+			}*/
 			cur_table1->column = column1;
 			cur_table2->column = column2;
 
@@ -427,30 +426,59 @@ int Join(RowIds** Result, uint64_t** array1,uint64_t** array2,uint64_t rows1, ui
 			FreeIndex(Index1,rowsA);
 			FreeIndex(Index2,rowsB);
 			
-			DeleteJoinList(&Head);
+			//DeleteJoinList(&Head);
 		}
 	}
 	return 0;
 }
 
-
-Solution* FindSolution(COMMANDLIST *command,uint64_t ***arrayname,Initial_Table* Table,Solution** Sol_Head,Solution* cur){
+Solution* FindSolution(COMMANDLIST *command,uint64_t ***arrayname,Initial_Table* Table,Solution** Sol_Head,Solution* cur, pthread_cond_t* thread_cond, pthread_mutex_t* thread_mut, int* waiting,Statistics** initStats){
 	// Find the solution of a query
 	
-	int* array,i,answer=0,num_of_files=command->num_of_files;
-	array=malloc(sizeof(int)*num_of_files);
-	Arrays* point=command->arraylist;
+	int* array, i, answer = 0, num_of_files = command->num_of_files;
+	array = malloc(sizeof(int)*num_of_files);
+	Arrays* point = command->arraylist;
 	for(i=0; i<num_of_files; i++){
-		array[i]=point->arrayname;
-		point=point->next;
+		array[i] = point->arrayname;
+		point = point->next;
 	}
 	
-	Current_Table* Cur_Table=malloc(sizeof(Current_Table)*num_of_files);
+	Statistics *stats[num_of_files];
+	for(i=0 ; i<num_of_files ; i++)
+		stats[i]=malloc(sizeof(Statistics)*Table[array[i]].columns);
+	
+	PROJECTION* pro;
+	pro = command->projections->next;
+	
+	cur = malloc(sizeof(Solution));
+        
+	cur->sum = malloc(sizeof(uint64_t)*command->projectionCount);
+	cur->next = NULL;
+	cur->counter = command->projectionCount;
+	
+	
+	
+	CopyStats(initStats,stats,array,Table,num_of_files);
+	answer = newSort(command, array,Table,initStats, stats);
+	DeleteStats(stats,num_of_files);
+	
+	if(answer == -1){			// No result print NULL
+		i=0;
+	
+		while(pro != NULL){
+			// The projections of this query are NULL
+			cur->sum[i]= 0;
+			pro=pro->next;
+			i++;
+		}
+		free(array);
+		return cur;
+	}
+	
+	Current_Table* Cur_Table = malloc(sizeof(Current_Table)*num_of_files);
 	Initialize_Cur_Table(Cur_Table, num_of_files);
 	
-	
 	RowIds* Result=NULL;
-	
 	
 	NODE* query;
 	query = command->nodes->next;
@@ -459,7 +487,7 @@ Solution* FindSolution(COMMANDLIST *command,uint64_t ***arrayname,Initial_Table*
 		
 		if(query->secondArray==-1){
 			// Filter
-			answer=Filter(arrayname[array[query->firstArray]],Table[array[query->firstArray]].rows,query->firstCol,query->secondCol , query->commandType, &Cur_Table[query->firstArray],query->firstArray);
+			answer=Filter(arrayname[array[query->firstArray]],Table[array[query->firstArray]].rows,query->firstCol,query->secondCol , query->commandType, &Cur_Table[query->firstArray],query->firstArray, thread_cond, thread_mut, waiting);
 			if(answer==-1)
 				// If there is no result stop with this query
 				break;
@@ -468,34 +496,22 @@ Solution* FindSolution(COMMANDLIST *command,uint64_t ***arrayname,Initial_Table*
 			// Join
 			if(query->firstArray == query->secondArray){
 				// Join between the same array- Self Join
-				answer= SelfJoin(&Result,arrayname[array[query->firstArray]],Table[array[query->firstArray]].rows, query->firstCol,query->secondCol, &Cur_Table[query->firstArray],query->firstArray,num_of_files);
+				answer= SelfJoin(&Result,arrayname[array[query->firstArray]],Table[array[query->firstArray]].rows, query->firstCol,query->secondCol, &Cur_Table[query->firstArray],query->firstArray,num_of_files, thread_cond, thread_mut, waiting);
 				if(answer==-1)
 					break;
 			
 			}
 			else{
 				// Join between two different arrays
-				answer= Join(&Result, arrayname[array[query->firstArray]], arrayname[array[query->secondArray]], Table[array[query->firstArray]].rows, Table[array[query->secondArray]].rows,query->firstCol,query->secondCol,&Cur_Table, &Cur_Table[query->firstArray], &Cur_Table[query->secondArray], query->firstArray,query->secondArray,num_of_files);
+				answer= Join(&Result, arrayname[array[query->firstArray]], arrayname[array[query->secondArray]], Table[array[query->firstArray]].rows, Table[array[query->secondArray]].rows,query->firstCol,query->secondCol,&Cur_Table, &Cur_Table[query->firstArray], &Cur_Table[query->secondArray], query->firstArray,query->secondArray,num_of_files, thread_cond, thread_mut, waiting);
 			
 				if(answer==-1)
-					break;			
-			}
-		
+					break;		
+			}		
 		}
 		query=query->next;
 	}
 	
-	
-	PROJECTION* pro;
-	pro=command->projections->next;
-
-	//cur= InsertSolution(Sol_Head,cur,command->projectionCount);
-
-	cur = malloc(sizeof(Solution));
-        
-	cur->sum = malloc(sizeof(uint64_t)*command->projectionCount);
-	cur->next = NULL;
-	cur->counter = command->projectionCount;
 	
 	i=0;
 	
@@ -505,7 +521,6 @@ Solution* FindSolution(COMMANDLIST *command,uint64_t ***arrayname,Initial_Table*
 		pro=pro->next;
 		i++;
 	}
-	
 	free(Cur_Table);
 	free(array);
 	FreeResult(&Result);
