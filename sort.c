@@ -2,8 +2,7 @@
 
 extern Job* JobHead; // Head of the Jobs List
 extern pthread_mutex_t sjoblist_mut;
-
-uint64_t all = 0; // gia to debugging to kana
+extern BUCKET_LIMIT;
 
 void CreateBucketList(bucket **head, int* hist, uint64_t* psum){
 	// Create the starting bucket's list based on the hist and psum
@@ -275,14 +274,10 @@ void FinalizeTables(uint64_t** Index1, uint64_t** Index2, bucket **head, pthread
 	uint64_t psum[256], **From, **To;
 	int bucket_counter = 1;
 
-	//	8eli svisimo afto, einai gia to debugging
-	uint64_t rowsyy = current->end;
-	all = 0;
-
 	while(current!=NULL){
 
 		// If the buckets are more than a specific number, give them to the working threads
-		if(bucket_counter >= 3){
+		if(bucket_counter >= BUCKET_LIMIT){
 			
 			pthread_mutex_lock(&sjoblist_mut);
 			pthread_mutex_lock(thread_mut);
@@ -524,56 +519,6 @@ void CopyBucketTriple(int64_t** From, int64_t** To, uint64_t from, uint64_t to, 
 	}
 }
 
-void FinalizeTablesThreadTriple(uint64_t** Index1, uint64_t** Index2, bucket **head, int columns){
-	// Sort the input tables
-	bucket *current = *head;
-	int hist[256];
-	uint64_t psum[256], **From, **To;
-
-	while(current!=NULL){
-
-		if(current->flag % 2 == 1){
-			From = Index1;
-			To = Index2;
-		}
-		else{
-			From = Index2;
-			To = Index1;
-		}
-
-		if(((current->end - current->start)*sizeof(From[0][1]) > 64*1024) && (current->numofbyte < 7)){
-			// This bucket is bigger than 64KB and need to be divided
-			uint64_t from = current->start, to = current->end;
-			int numofbyte = current->numofbyte + 1;
-
-			// Create a hist based on this bucket (hashed on the next byte)
-			CreateHistTriple(From, hist, from, to, numofbyte);
-
-			//Create psum
-			CreatePsum(hist, psum);
-
-			// Divide the bucket to smaller ones
-			DivideBucket(head, hist, psum, current, numofbyte);
-						
-			// Reorder this newly made part of the table						
-			ReorderTriple(From, To, psum, from, to, numofbyte, columns);
-		}
-		else{
-			if(current->numofbyte < 7)
-				MyqsortTriple(From, (int64_t)current->start, (int64_t)current->end-1, columns);
-
-			// ya debugging
-			all += current->end-1 -  current->start;
-
-			// It is ready to be copied to the other index table
-			CopyBucketTriple(From, To, current->start, current->end, columns);
-
-			RemoveBucket(head, current);
-		}
-		current = *head;
-	}
-}
-
 void FinalizeTablesTriple(int64_t** Index1, int64_t** Index2, bucket **head, int columns, pthread_cond_t* thread_cond, pthread_mutex_t* thread_mut, int* waiting){
 	// Sort the input tables
 	bucket *current = *head;
@@ -585,7 +530,7 @@ void FinalizeTablesTriple(int64_t** Index1, int64_t** Index2, bucket **head, int
 	while(current!=NULL){
 
 		// If the buckets are more than a specific number, give them to the working threads
-		if(bucket_counter >= 3){
+		if(bucket_counter >= BUCKET_LIMIT){
 
 			pthread_mutex_lock(&sjoblist_mut);
 			pthread_mutex_lock(thread_mut);
@@ -624,6 +569,53 @@ void FinalizeTablesTriple(int64_t** Index1, int64_t** Index2, bucket **head, int
 
 			// Divide the bucket to smaller ones
 			bucket_counter += DivideBucket(head, hist, psum, current, numofbyte);
+						
+			// Reorder this newly made part of the table						
+			ReorderTriple(From, To, psum, from, to, numofbyte, columns);
+		}
+		else{
+			if(current->numofbyte < 7)
+				MyqsortTriple(From, (int64_t)current->start, (int64_t)current->end-1, columns);
+
+			// It is ready to be copied to the other index table
+			CopyBucketTriple(From, To, current->start, current->end, columns);
+
+			RemoveBucket(head, current);
+		}
+		current = *head;
+	}
+}
+
+void FinalizeTablesThreadTriple(uint64_t** Index1, uint64_t** Index2, bucket **head, int columns){
+	// Sort the input tables
+	bucket *current = *head;
+	int hist[256];
+	uint64_t psum[256], **From, **To;
+
+	while(current!=NULL){
+
+		if(current->flag % 2 == 1){
+			From = Index1;
+			To = Index2;
+		}
+		else{
+			From = Index2;
+			To = Index1;
+		}
+
+		if(((current->end - current->start)*sizeof(From[0][1]) > 64*1024) && (current->numofbyte < 7)){
+			// This bucket is bigger than 64KB and need to be divided
+			uint64_t from = current->start, to = current->end;
+			int numofbyte = current->numofbyte + 1;
+
+			// Create a hist based on this bucket (hashed on the next byte)
+			CreateHistTriple(From, hist, from, to, numofbyte);
+
+			//Create psum
+			CreatePsum(hist, psum);
+
+			// Divide the bucket to smaller ones
+			DivideBucket(head, hist, psum, current, numofbyte);
 						
 			// Reorder this newly made part of the table						
 			ReorderTriple(From, To, psum, from, to, numofbyte, columns);
