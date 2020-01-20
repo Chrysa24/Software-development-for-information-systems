@@ -1,5 +1,10 @@
 #include "header.h"
 
+extern Job* JobHead; // Head of the Jobs List
+extern pthread_mutex_t sjoblist_mut;
+
+uint64_t all = 0; // gia to debugging to kana
+
 void CreateBucketList(bucket **head, int* hist, uint64_t* psum){
 	// Create the starting bucket's list based on the hist and psum
 	int i, counter = 0, lastBucket = 0;
@@ -40,7 +45,7 @@ void CreateBucketList(bucket **head, int* hist, uint64_t* psum){
 	temp->next = NULL;
 }
 
-void DivideBucket(bucket **head, int* hist, uint64_t* psum, bucket *base, int numofbyte){
+int DivideBucket(bucket **head, int* hist, uint64_t* psum, bucket *base, int numofbyte){
 	// When a bucket is bigger than 64KB it is divided to smaller buckets
 	// Base is the pointer that points to this bucket node, a new hist and psum must have been created
 	int i, counter = 0, lastBucket = 0, flag = 0;
@@ -91,6 +96,8 @@ void DivideBucket(bucket **head, int* hist, uint64_t* psum, bucket *base, int nu
 	//This is the last node's next
 	temp->next = base->next;
 	free(base);
+
+	return lastBucket-1;
 }
 
 void RemoveBucket(bucket **head, bucket *base){
@@ -261,7 +268,77 @@ void Myqsort(uint64_t** array, int64_t start, int64_t end){
 	Myqsort(array, i+1 ,end);
 }
 
-void FinalizeTables(uint64_t** Index1, uint64_t** Index2, bucket **head){
+void FinalizeTables(uint64_t** Index1, uint64_t** Index2, bucket **head, pthread_cond_t* thread_cond, pthread_mutex_t* thread_mut, int* waiting){
+	// Sort the input tables
+	bucket *current = *head;
+	int hist[256];
+	uint64_t psum[256], **From, **To;
+	int bucket_counter = 1;
+
+	//	8eli svisimo afto, einai gia to debugging
+	uint64_t rowsyy = current->end;
+	all = 0;
+
+	while(current!=NULL){
+
+		// If the buckets are more than a specific number, give them to the working threads
+		if(bucket_counter >= 3){
+			
+			pthread_mutex_lock(&sjoblist_mut);
+			pthread_mutex_lock(thread_mut);
+				*waiting = BucketsToJobs(current, JobHead, Index1, Index2, thread_cond, thread_mut, waiting, bucket_counter);
+			pthread_mutex_unlock(thread_mut);
+			pthread_mutex_unlock(&sjoblist_mut);
+				
+			//Wait until sorting is done
+			pthread_mutex_lock(thread_mut);
+				while(*waiting != 0){
+					pthread_cond_wait(thread_cond,thread_mut);
+				}
+			pthread_mutex_unlock(thread_mut);
+
+			return;
+		}
+		else if(current->flag % 2 == 1){
+			From = Index1;
+			To = Index2;
+		}
+		else{
+			From = Index2;
+			To = Index1;
+		}
+		
+		if(((current->end - current->start)*sizeof(From[0][1]) > 64*1024) && (current->numofbyte < 7)){
+			// This bucket is bigger than 64KB and need to be divided
+			uint64_t from = current->start, to = current->end;
+			int numofbyte = current->numofbyte + 1;
+
+			// Create a hist based on this bucket (hashed on the next byte)
+			CreateHist(From, hist, from, to, numofbyte);
+
+			//Create psum
+			CreatePsum(hist, psum);
+
+			// Divide the bucket to smaller ones
+			bucket_counter += DivideBucket(head, hist, psum, current, numofbyte);
+						
+			// Reorder this newly made part of the table						
+			Reorder(From, To, psum, from, to, numofbyte);
+		}
+		else{
+			if(current->numofbyte < 7)
+				Myqsort(From, (int64_t)current->start, (int64_t)current->end-1);
+
+			// It is ready to be copied to the other index table
+			CopyBucket(From, To, current->start, current->end);
+
+			RemoveBucket(head, current);
+		}
+		current = *head;
+	}
+}
+
+void FinalizeTablesThread(uint64_t** Index1, uint64_t** Index2, bucket **head){
 	// Sort the input tables
 	bucket *current = *head;
 	int hist[256];
@@ -313,16 +390,17 @@ void CompareTables(uint64_t** Table1,uint64_t** Table2,uint64_t rows, char* name
 	Myqsort(Table1, 0, rows-1);
 
 	uint64_t i;
-	for(i=0;i< rows ; i++){
+	for(i=0 ;i< rows ; i++){
 		if(Table1[i][1]!=Table2[i][1]){
 			printf("* Comparison Failed for %s: Mistake in row: %lu. *\n", name, i);
+			printf("%li is not %li\n", Table1[i], Table2[i]);
 			return;
 		}
 	}
 	printf("Comparison Successful for %s.\n", name);
 }
 
-void Sort(uint64_t** indexA, uint64_t rowsA){
+void Sort(uint64_t** indexA, uint64_t rowsA, pthread_cond_t* thread_cond, pthread_mutex_t* thread_mut, int* waiting){
 	// Sorts the given index table
 	int hist[256],i;
 	uint64_t psum[256];
@@ -347,7 +425,7 @@ void Sort(uint64_t** indexA, uint64_t rowsA){
 	CreateBucketList(&head, hist, psum);
 
 	// Sort table A
-	FinalizeTables(indexA, twin, &head);
+	FinalizeTables(indexA, twin, &head, thread_cond,thread_mut, waiting);
 
 	for(i=0 ; i<rowsA ; i++)
 		free(twin[i]);
@@ -446,16 +524,85 @@ void CopyBucketTriple(int64_t** From, int64_t** To, uint64_t from, uint64_t to, 
 	}
 }
 
-void FinalizeTablesTriple(int64_t** Index1, int64_t** Index2, bucket **head, int columns){
+void FinalizeTablesThreadTriple(uint64_t** Index1, uint64_t** Index2, bucket **head, int columns){
+	// Sort the input tables
+	bucket *current = *head;
+	int hist[256];
+	uint64_t psum[256], **From, **To;
+
+	while(current!=NULL){
+
+		if(current->flag % 2 == 1){
+			From = Index1;
+			To = Index2;
+		}
+		else{
+			From = Index2;
+			To = Index1;
+		}
+
+		if(((current->end - current->start)*sizeof(From[0][1]) > 64*1024) && (current->numofbyte < 7)){
+			// This bucket is bigger than 64KB and need to be divided
+			uint64_t from = current->start, to = current->end;
+			int numofbyte = current->numofbyte + 1;
+
+			// Create a hist based on this bucket (hashed on the next byte)
+			CreateHistTriple(From, hist, from, to, numofbyte);
+
+			//Create psum
+			CreatePsum(hist, psum);
+
+			// Divide the bucket to smaller ones
+			DivideBucket(head, hist, psum, current, numofbyte);
+						
+			// Reorder this newly made part of the table						
+			ReorderTriple(From, To, psum, from, to, numofbyte, columns);
+		}
+		else{
+			if(current->numofbyte < 7)
+				MyqsortTriple(From, (int64_t)current->start, (int64_t)current->end-1, columns);
+
+			// ya debugging
+			all += current->end-1 -  current->start;
+
+			// It is ready to be copied to the other index table
+			CopyBucketTriple(From, To, current->start, current->end, columns);
+
+			RemoveBucket(head, current);
+		}
+		current = *head;
+	}
+}
+
+void FinalizeTablesTriple(int64_t** Index1, int64_t** Index2, bucket **head, int columns, pthread_cond_t* thread_cond, pthread_mutex_t* thread_mut, int* waiting){
 	// Sort the input tables
 	bucket *current = *head;
 	int hist[256];
 	uint64_t psum[256];
 	int64_t **From, **To;
+	int bucket_counter = 1;
 
 	while(current!=NULL){
 
-		if(current->flag % 2 == 1){
+		// If the buckets are more than a specific number, give them to the working threads
+		if(bucket_counter >= 3){
+
+			pthread_mutex_lock(&sjoblist_mut);
+			pthread_mutex_lock(thread_mut);
+				*waiting = BucketsToJobsTriple(current, JobHead, Index1, Index2, columns, thread_cond, thread_mut, waiting, bucket_counter);
+			pthread_mutex_unlock(thread_mut);
+			pthread_mutex_unlock(&sjoblist_mut);
+				
+			//Wait until sorting is done
+			pthread_mutex_lock(thread_mut);
+				while(*waiting != 0){
+					pthread_cond_wait(thread_cond,thread_mut);
+				}
+			pthread_mutex_unlock(thread_mut);		
+
+			return;
+		}
+		else if(current->flag % 2 == 1){
 			From = Index1;
 			To = Index2;
 		}
@@ -476,7 +623,7 @@ void FinalizeTablesTriple(int64_t** Index1, int64_t** Index2, bucket **head, int
 			CreatePsum(hist, psum);
 
 			// Divide the bucket to smaller ones
-			DivideBucket(head, hist, psum, current, numofbyte);
+			bucket_counter += DivideBucket(head, hist, psum, current, numofbyte);
 						
 			// Reorder this newly made part of the table						
 			ReorderTriple(From, To, psum, from, to, numofbyte, columns);
@@ -494,7 +641,7 @@ void FinalizeTablesTriple(int64_t** Index1, int64_t** Index2, bucket **head, int
 	}
 }
 
-void SortTriple(int64_t** indexA, uint64_t rowsA, int num_of_files){
+void SortTriple(int64_t** indexA, uint64_t rowsA, int num_of_files,pthread_cond_t* thread_cond, pthread_mutex_t* thread_mut, int* waiting){
 	// Sorts the given index table (index table has 3 columns)
 	int hist[256],i;
 	uint64_t psum[256];
@@ -519,7 +666,7 @@ void SortTriple(int64_t** indexA, uint64_t rowsA, int num_of_files){
 	CreateBucketList(&head, hist, psum);
 
 	// Sort table A
-	FinalizeTablesTriple(indexA, twin, &head, num_of_files+1);
+	FinalizeTablesTriple(indexA, twin, &head, num_of_files+1, thread_cond,thread_mut, waiting);
 
 	for(i=0 ; i<rowsA ; i++)
 		free(twin[i]);
