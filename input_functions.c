@@ -1,8 +1,11 @@
 #include "header.h"
 
-void ReadFilesRecords(char* filename,uint64_t*** arrayname,Initial_Table* Table,int num_of_files){
+void ReadFilesRecords(char* filename,uint64_t*** arrayname,Initial_Table* Table,int num_of_files,Statistics** initStats){
 	
 	int i,j;
+	uint64_t N=6700417;
+	uint64_t min,max;
+	
 	FILE* fp = fopen(filename, "rb");// These files are binary
 	if(fp == NULL)
 		printf("ERROR: Could not open the file %s (ReadFilesRecords).\n", filename);
@@ -13,15 +16,66 @@ void ReadFilesRecords(char* filename,uint64_t*** arrayname,Initial_Table* Table,
 	arrayname[num_of_files]= malloc(sizeof(uint64_t)*Table[num_of_files].columns);// We allocate memory for this array of records	
 	Table[num_of_files].pointers=arrayname[num_of_files]; 
 
+	initStats[num_of_files]=malloc(sizeof(Statistics)*Table[num_of_files].columns);	// We need for each column of file to find statistics
+	
+
 	for(i=0;i<Table[num_of_files].columns; i++){
 		arrayname[num_of_files][i]=malloc(sizeof(uint64_t)* Table[num_of_files].rows);
 		Table[num_of_files].pointers[i]=arrayname[num_of_files][i];// Each pointer points to the first element of a column
 	}
 				
-	for(i=0;i<Table[num_of_files].columns; i++)
-		for(j=0;j<Table[num_of_files].rows; j++)
+	uint64_t number;		
+	for(i=0;i<Table[num_of_files].columns; i++){
+		min=9446744073709551614;
+		max=1;
+		for(j=0;j<Table[num_of_files].rows; j++){
+		
 			fread(&arrayname[num_of_files][i][j], sizeof(uint64_t), 1, fp);// Read and save all the records
-
+			if(arrayname[num_of_files][i][j]<min)
+				min=arrayname[num_of_files][i][j];
+			if(arrayname[num_of_files][i][j]>max)
+				max=arrayname[num_of_files][i][j];
+		}
+		
+		
+		initStats[num_of_files][i].Ia=min;
+		initStats[num_of_files][i].Ua=max;
+		
+		initStats[num_of_files][i].Fa=Table[num_of_files].rows;
+		
+		// Work to find Da
+		number=max - min + 1;
+		uint64_t rows;
+		if(number<=N)
+			rows=number;
+		else
+			rows=N;
+		
+		initStats[num_of_files][i].check=malloc(sizeof(bool)*rows);
+		uint64_t counter=0;	
+		
+		for(j = 0; j < rows ; j++)
+			initStats[num_of_files][i].check[j]=false;
+			
+		
+		for(j=0;j<Table[num_of_files].rows; j++)
+			if(number<=N && initStats[num_of_files][i].check[arrayname[num_of_files][i][j]-min]== false){
+				counter++;
+				initStats[num_of_files][i].check[arrayname[num_of_files][i][j]-min]= true;
+			}
+			else if(number>N && initStats[num_of_files][i].check[(arrayname[num_of_files][i][j]-min)%N]== false){
+				counter++;
+				initStats[num_of_files][i].check[(arrayname[num_of_files][i][j]-min)%N]= true;
+			}
+			
+		
+		/*for(j=0; j<rows ; j++)
+			if(initStats[num_of_files][i].check[j]==true)
+				counter++;*/
+		
+		initStats[num_of_files][i].Da=counter;
+	}
+			
 	fclose(fp);
 }
 
@@ -46,7 +100,7 @@ int Countrows(char* filename){
 	return num_of_files;
 }
 
-void ReadInputFiles(char* File,uint64_t*** arrayname,Initial_Table* Table,int Flag){
+void ReadInputFiles(char* File,uint64_t*** arrayname,Initial_Table* Table,int Flag,Statistics** stats){
 
 	FILE* Fp;
 	Fp = fopen(File, "r");
@@ -73,7 +127,7 @@ void ReadInputFiles(char* File,uint64_t*** arrayname,Initial_Table* Table,int Fl
 			strcpy(path,"");
 
 		strcat(path,filename);
-		ReadFilesRecords(path,arrayname,Table,num_of_files);		
+		ReadFilesRecords(path,arrayname,Table,num_of_files,stats);		
 					
 		num_of_files++;
 	}
